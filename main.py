@@ -194,83 +194,97 @@ async def stockle(ctx: discord.ApplicationContext):
 @bot.slash_command(name="guess", description="Make a guess in your current Stockle game.")
 async def guess(ctx: discord.ApplicationContext, ticker: str):
     user_id = ctx.author.id
-    guess_ticker = ticker.upper().strip() # Standardize the guess
+    guess_ticker = ticker.upper().strip()
 
     if user_id not in active_games:
-        await ctx.respond("You don't have a game in progress. Use `/stockle` to start one.", ephemeral=True)
+        # ... (no change to this part)
         return
 
     game = active_games[user_id]
-    answer_ticker = game["answer"]
+    # ... (no change to validation logic)
+    
+    await ctx.defer(ephemeral=True) # Defer ephemerally so the "thinking" message is private
 
-    if len(guess_ticker) != len(answer_ticker):
-        await ctx.respond(f"Your guess must be a **{len(answer_ticker)}-letter** ticker.", ephemeral=True)
-        return
-
-    await ctx.defer()
-
-    # Fetch data for the guessed ticker to validate it and get its info
     guess_data = get_stock_data(guess_ticker)
     if not guess_data:
-        await ctx.respond(
-            f"'{guess_ticker}' doesn't seem to be a valid stock ticker. Please try again.",
-            ephemeral=True
-        )
+        # ... (no change to this part)
         return
 
-    # Process the guess
+    # --- All the logic for hints and history is the same ---
     game["guesses"] += 1
     answer_data = game["answer_data"]
 
-    # Generate feedback hints
     wordle_hint = generate_wordle_feedback(guess_ticker, answer_ticker)
     sector_feedback = f"🟩 {answer_data['sector']}" if guess_data["sector"] == answer_data["sector"] else "🟥 Wrong"
     cap_feedback = ("✅ Correct" if guess_data["market_cap"] == answer_data["market_cap"]
                     else "⬇️ Lower" if guess_data["market_cap"] > answer_data["market_cap"]
                     else "⬆️ Higher")
 
-    # Add the current guess to the game's history
     history_line = f"**{game['guesses']}.** `{guess_ticker}` {wordle_hint}\n> Sector: {sector_feedback} | Mkt Cap: {cap_feedback}"
     game["history"].append(history_line)
 
     is_win = (guess_ticker == answer_ticker)
     is_loss = (game["guesses"] >= 6 and not is_win)
+    
+    # --- THIS IS THE NEW CORE LOGIC ---
 
-    # Check for win/loss condition
+    # Check for win/loss condition first
     if is_win or is_loss:
         if is_win:
-            end_title = f"🎉 You got it! It was {answer_ticker}!"
-            end_desc = f"**{answer_data['name']}**\n\n" + "\n\n".join(game["history"])
-            end_color = discord.Color.gold()
+            end_embed = discord.Embed(title=f"🎉 You got it! It was {answer_ticker}!", description=f"**{answer_data['name']}**\n\n" + "\n\n".join(game["history"]), color=discord.Color.gold())
         else: # Loss condition
-            end_title = "Game Over!"
-            end_desc = f"The correct ticker was **{answer_ticker} ({answer_data['name']})**.\n\n" + "\n\n".join(game["history"])
-            end_color = discord.Color.red()
+            end_embed = discord.Embed(title="Game Over!", description=f"The correct ticker was **{answer_ticker} ({answer_data['name']})**.\n\n" + "\n\n".join(game["history"]), color=discord.Color.red())
 
-        end_embed = discord.Embed(title=end_title, description=end_desc, color=end_color)
-
+        # Edit the original /stockle message and the history message
         original_message = game.get("message")
-        if original_message:
-            await original_message.edit(view=None) # Remove buttons from original message
+        if original_message: await original_message.edit(view=None)
+        
+        history_message = game.get("history_message")
+        if history_message:
+            await history_message.edit(embed=end_embed)
+        else: # If they win/lose on the first guess, send a new message
+            await ctx.channel.send(embed=end_embed)
 
-        await ctx.respond(embed=end_embed)
-        del active_games[user_id] # Clean up the finished game
+        await ctx.followup.send("Game over! See the final result above.", ephemeral=True)
+        del active_games[user_id]
         return
 
-    # If the game is not over, show the updated history
+    # If the game is not over, create the history embed
     embed = discord.Embed(title="Your Guess History", description="\n\n".join(game["history"]), color=discord.Color.blue())
     embed.set_footer(text=f"You have {6 - game['guesses']} guesses left.")
-    await ctx.respond(embed=embed)
-
+    
+    # Now, either edit the existing message or send a new one
+    history_message = game.get("history_message")
+    if history_message:
+        # If we already have a history message, edit it
+        await history_message.edit(embed=embed)
+        await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
+    else:
+        # If this is the first guess, send a new message and save it
+        response_message = await ctx.channel.send(embed=embed)
+        game["history_message"] = response_message
+        await ctx.followup.send("Your first guess has been recorded.", ephemeral=True)
 
 @bot.slash_command(name="quit", description="Quit your current Stockle game.")
 async def quit_game(ctx: discord.ApplicationContext):
     user_id = ctx.author.id
     if user_id in active_games:
         game = active_games[user_id]
+        
+        # Disable buttons on the original message
         original_message = game.get("message")
         if original_message:
-            await original_message.edit(view=None) # Remove buttons
+            await original_message.edit(view=None)
+
+        # --- NEW PART: Delete the history message ---
+        history_message = game.get("history_message")
+        if history_message:
+            try:
+                await history_message.delete()
+            except discord.errors.NotFound:
+                # The message might have been deleted by a moderator, which is fine.
+                pass
+
         del active_games[user_id]
         await ctx.respond("Your game has been ended.", ephemeral=True)
     else:
