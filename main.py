@@ -24,7 +24,6 @@ TICKER_LIST = [
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
-# 'debug_guilds' is removed so commands work on all servers (after up to a 1-hour propagation)
 bot = discord.Bot(intents=intents) 
 active_games = {}
 
@@ -262,8 +261,13 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
         response_message = await ctx.channel.send(embed=embed)
         game["history_message"] = response_message
         
-    # Fulfill the promise for a normal guess
-    await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
+    # MODIFICATION START
+    # Fulfill the deferred interaction silently.
+    # We send a temporary, invisible message and delete it immediately.
+    # This acknowledges the command without sending a visible "guess recorded" message.
+    interaction_response = await ctx.followup.send("\u200b", ephemeral=True)
+    await interaction_response.delete()
+    # MODIFICATION END
 
 
 @bot.slash_command(name="quit", description="Quit your current Stockle game.")
@@ -293,8 +297,10 @@ async def quit_game(ctx: discord.ApplicationContext):
 
 # --- Run the Bot ---
 try:
+    # It is recommended to use an environment variable for your token
+    # For example, in Replit, use the Secrets tool
     TOKEN = os.environ['DISCORD_TOKEN']
     bot.run(TOKEN)
 except KeyError:
     print("FATAL ERROR: DISCORD_TOKEN environment variable not set.")
-    print("Please set your bot's token as an environment variable (e.g., in Replit Secrets).")
+    print("Please set your bot's token as an environment variable.")
