@@ -196,18 +196,28 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
     user_id = ctx.author.id
     guess_ticker = ticker.upper().strip()
 
+    # --- STEP 1: Perform all FAST checks before deferring ---
     if user_id not in active_games:
-        # ... (no change to this part)
+        await ctx.respond("You don't have a game in progress. Use `/stockle` to start one.", ephemeral=True)
         return
 
     game = active_games[user_id]
-    # ... (no change to validation logic)
-    
-    await ctx.defer(ephemeral=True) # Defer ephemerally so the "thinking" message is private
+    answer_ticker = game["answer"]
 
-    guess_data = get_stock_data(guess_ticker)
+    if len(guess_ticker) != len(answer_ticker):
+        await ctx.respond(f"Your guess must be a **{len(answer_ticker)}-letter** ticker.", ephemeral=True)
+        return
+
+    # --- STEP 2: Defer ONLY when you're about to do a SLOW task ---
+    await ctx.defer(ephemeral=True) 
+
+    guess_data = get_stock_data(guess_ticker) # This is the slow part
     if not guess_data:
-        # ... (no change to this part)
+        # Now we MUST use followup.send() because we deferred
+        await ctx.followup.send(
+            f"'{guess_ticker}' doesn't seem to be a valid stock ticker. Please try again.",
+            ephemeral=True
+        )
         return
 
     # --- All the logic for hints and history is the same ---
@@ -225,8 +235,6 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
 
     is_win = (guess_ticker == answer_ticker)
     is_loss = (game["guesses"] >= 6 and not is_win)
-    
-    # --- THIS IS THE NEW CORE LOGIC ---
 
     # Check for win/loss condition first
     if is_win or is_loss:
@@ -235,16 +243,16 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
         else: # Loss condition
             end_embed = discord.Embed(title="Game Over!", description=f"The correct ticker was **{answer_ticker} ({answer_data['name']})**.\n\n" + "\n\n".join(game["history"]), color=discord.Color.red())
 
-        # Edit the original /stockle message and the history message
         original_message = game.get("message")
         if original_message: await original_message.edit(view=None)
         
         history_message = game.get("history_message")
         if history_message:
             await history_message.edit(embed=end_embed)
-        else: # If they win/lose on the first guess, send a new message
+        else:
             await ctx.channel.send(embed=end_embed)
-
+        
+        # Fulfill the promise for the win/loss condition
         await ctx.followup.send("Game over! See the final result above.", ephemeral=True)
         del active_games[user_id]
         return
@@ -256,10 +264,13 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
     # Now, either edit the existing message or send a new one
     history_message = game.get("history_message")
     if history_message:
-        # If we already have a history message, edit it
         await history_message.edit(embed=embed)
-        await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
     else:
+        response_message = await ctx.channel.send(embed=embed)
+        game["history_message"] = response_message
+        
+    # Fulfill the promise for a normal guess
+    await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
         # If this is the first guess, send a new message and save it
         response_message = await ctx.channel.send(embed=embed)
         game["history_message"] = response_message
