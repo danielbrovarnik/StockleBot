@@ -1,0 +1,4 @@
+py-cord
+yfinance
+requests
+Pillow
