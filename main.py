@@ -7,9 +7,6 @@ from PIL import Image
 from io import BytesIO
 import yfinance as yf
 
-# --- Configuration ---
-# IMPORTANT: Make sure you have replaced this with your actual server ID!
-SERVER_ID = 1186497788251484160 
 
 TICKER_LIST = [
     "NVDA", "MSFT", "AAPL", "AMZN", "AVGO", "META", "NFLX", "TSLA", "GOOGL",
@@ -27,7 +24,7 @@ TICKER_LIST = [
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
-bot = discord.Bot(intents=intents, debug_guilds=[SERVER_ID])
+bot = discord.Bot(intents=intents) 
 active_games = {}
 
 # --- Helper Functions ---
