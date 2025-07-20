@@ -7,7 +7,7 @@ from PIL import Image
 from io import BytesIO
 import yfinance as yf
 
-
+# --- Configuration ---
 TICKER_LIST = [
     "NVDA", "MSFT", "AAPL", "AMZN", "AVGO", "META", "NFLX", "TSLA", "GOOGL",
     "COST", "GOOG", "PLTR", "CSCO", "AMD", "TMUS", "LIN", "INTU", "PEP",
@@ -24,6 +24,7 @@ TICKER_LIST = [
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
+# 'debug_guilds' is removed so commands work on all servers (after up to a 1-hour propagation)
 bot = discord.Bot(intents=intents) 
 active_games = {}
 
@@ -74,7 +75,6 @@ def get_stock_data(ticker: str) -> dict | None:
     try:
         stock = yf.Ticker(ticker)
         # A robust check: ensure info exists and has a market cap.
-        # This filters out invalid tickers and some non-stock entities.
         if stock.info and stock.info.get('marketCap') is not None:
             return {
                 "ticker": stock.info.get('symbol', 'N/A'),
@@ -84,7 +84,7 @@ def get_stock_data(ticker: str) -> dict | None:
             }
         return None
     except Exception:
-        # yfinance will throw an error for most invalid tickers, which we catch here.
+        # yfinance will throw an error for most invalid tickers
         return None
 
 # --- UI Views ---
@@ -105,11 +105,11 @@ class TimeframeView(View):
 
     async def update_chart(self, interaction: discord.Interaction, timeframe: str):
         """Updates the chart image in the original message."""
-        await interaction.response.defer() # Acknowledge the interaction
+        await interaction.response.defer()
         game = active_games.get(interaction.user.id)
         if not game:
             await interaction.followup.send("Your game has ended.", ephemeral=True)
-            self.stop() # Disable the view
+            self.stop()
             return
 
         ticker = game["answer"]
@@ -117,7 +117,6 @@ class TimeframeView(View):
 
         if chart_file_path:
             embed = self.message.embeds[0]
-            # Use a random filename to bypass Discord's image cache
             cache_buster = f"stock_chart_{random.randint(1,99999)}.png"
             embed.set_image(url=f"attachment://{cache_buster}")
             with open(chart_file_path, 'rb') as f:
@@ -153,9 +152,8 @@ async def stockle(ctx: discord.ApplicationContext):
         await ctx.respond("You already have a game in progress! Use `/quit` to end it.", ephemeral=True)
         return
 
-    await ctx.defer() # Defer the response as fetching data can take time
+    await ctx.defer()
 
-    # Find a valid ticker to use as the answer
     answer_ticker = random.choice(TICKER_LIST)
     answer_data = get_stock_data(answer_ticker)
     if not answer_data:
@@ -167,7 +165,6 @@ async def stockle(ctx: discord.ApplicationContext):
         await ctx.followup.send("Sorry, couldn't generate the stock chart for the game.", ephemeral=True)
         return
 
-    # Create the initial game message
     embed = discord.Embed(
         title="Guess the Stock Ticker!",
         description=f"The answer is a **{len(answer_ticker)}-letter** ticker.\nUse `/guess <TICKER>` to play.",
@@ -180,13 +177,9 @@ async def stockle(ctx: discord.ApplicationContext):
     view = TimeframeView(author_id=user_id, original_message=response_message)
     await response_message.edit(view=view)
 
-    # Store the game state
     active_games[user_id] = {
-        "answer": answer_ticker,
-        "answer_data": answer_data,
-        "guesses": 0,
-        "history": [],
-        "message": response_message
+        "answer": answer_ticker, "answer_data": answer_data,
+        "guesses": 0, "history": [], "message": response_message
     }
     os.remove(chart_file_path)
 
@@ -271,10 +264,7 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
         
     # Fulfill the promise for a normal guess
     await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
-        # If this is the first guess, send a new message and save it
-        response_message = await ctx.channel.send(embed=embed)
-        game["history_message"] = response_message
-        await ctx.followup.send("Your first guess has been recorded.", ephemeral=True)
+
 
 @bot.slash_command(name="quit", description="Quit your current Stockle game.")
 async def quit_game(ctx: discord.ApplicationContext):
@@ -287,13 +277,13 @@ async def quit_game(ctx: discord.ApplicationContext):
         if original_message:
             await original_message.edit(view=None)
 
-        # --- NEW PART: Delete the history message ---
+        # Delete the history message
         history_message = game.get("history_message")
         if history_message:
             try:
                 await history_message.delete()
             except discord.errors.NotFound:
-                # The message might have been deleted by a moderator, which is fine.
+                # The message might have been deleted by a user/mod, which is fine.
                 pass
 
         del active_games[user_id]
@@ -302,8 +292,6 @@ async def quit_game(ctx: discord.ApplicationContext):
         await ctx.respond("You don't have an active game to quit.", ephemeral=True)
 
 # --- Run the Bot ---
-# Make sure to set your bot's token as an environment variable.
-# For example, in Replit, use the "Secrets" tab to set DISCORD_TOKEN.
 try:
     TOKEN = os.environ['DISCORD_TOKEN']
     bot.run(TOKEN)
