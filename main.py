@@ -30,7 +30,6 @@ active_games = {}
 # --- Helper Functions ---
 
 def generate_wordle_feedback(guess: str, answer: str) -> str:
-    """Generates Wordle-style feedback (🟩🟨⬛) for a guess."""
     if len(guess) != len(answer): return ""
     feedback = ["⬛"] * len(answer)
     answer_letters = list(answer)
@@ -47,13 +46,11 @@ def generate_wordle_feedback(guess: str, answer: str) -> str:
 
 
 def generate_chart_image(ticker: str, user_id: int, timeframe: str = 'd') -> str | None:
-    """Generates a stock chart image from Finviz and saves it locally."""
     finviz_url = f"https://finviz.com/chart.ashx?t={ticker}&ty=c&ta=0&p={timeframe}&s=l"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get(finviz_url, headers=headers)
         if response.status_code != 200:
-            print(f"Finviz returned status {response.status_code} for {ticker}")
             return None
         image = Image.open(BytesIO(response.content))
         width, height = image.size
@@ -67,7 +64,6 @@ def generate_chart_image(ticker: str, user_id: int, timeframe: str = 'd') -> str
 
 
 def get_stock_data(ticker: str) -> dict | None:
-    """Fetches stock data from yfinance and validates it."""
     try:
         stock = yf.Ticker(ticker)
         if stock.info and stock.info.get('marketCap') is not None:
@@ -84,7 +80,6 @@ def get_stock_data(ticker: str) -> dict | None:
 # --- UI Views ---
 
 class TimeframeView(View):
-    """A view with buttons to change the timeframe of the stock chart."""
     def __init__(self, author_id: int, original_message: discord.InteractionMessage):
         super().__init__(timeout=300)
         self.author_id = author_id
@@ -117,16 +112,11 @@ class TimeframeView(View):
             await interaction.followup.send("Sorry, couldn't generate the new chart.", ephemeral=True)
 
     @discord.ui.button(label="Daily", style=discord.ButtonStyle.success)
-    async def daily_button(self, button: Button, interaction: discord.Interaction):
-        await self.update_chart(interaction, 'd')
-
+    async def daily_button(self, button: Button, interaction: discord.Interaction): await self.update_chart(interaction, 'd')
     @discord.ui.button(label="Weekly", style=discord.ButtonStyle.primary)
-    async def weekly_button(self, button: Button, interaction: discord.Interaction):
-        await self.update_chart(interaction, 'w')
-
+    async def weekly_button(self, button: Button, interaction: discord.Interaction): await self.update_chart(interaction, 'w')
     @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary)
-    async def monthly_button(self, button: Button, interaction: discord.Interaction):
-        await self.update_chart(interaction, 'm')
+    async def monthly_button(self, button: Button, interaction: discord.Interaction): await self.update_chart(interaction, 'm')
 
 # --- Bot Events and Commands ---
 
@@ -140,16 +130,23 @@ async def stockle(ctx: discord.ApplicationContext):
     if user_id in active_games:
         await ctx.respond("You already have a game in progress! Use `/quit` to end it.", ephemeral=True)
         return
+    
+    # Defer publically because we need to send a public message.
     await ctx.defer()
+    
     answer_ticker = random.choice(TICKER_LIST)
     answer_data = get_stock_data(answer_ticker)
     if not answer_data:
+        # We MUST use followup because we deferred.
         await ctx.followup.send("Sorry, couldn't start a game. The chosen answer stock was invalid.", ephemeral=True)
         return
+    
     chart_file_path = generate_chart_image(answer_ticker, user_id, timeframe='d')
     if not chart_file_path:
+        # We MUST use followup because we deferred.
         await ctx.followup.send("Sorry, couldn't generate the stock chart for the game.", ephemeral=True)
         return
+    
     embed = discord.Embed(
         title="Guess the Stock Ticker!",
         description=f"The answer is a **{len(answer_ticker)}-letter** ticker.\nUse `/guess <TICKER>` to play.",
@@ -157,9 +154,13 @@ async def stockle(ctx: discord.ApplicationContext):
     )
     file = discord.File(chart_file_path, filename="stock_chart.png")
     embed.set_image(url="attachment://stock_chart.png")
+    
+    # This is the main success path. It MUST use followup.send to create the new public message.
     response_message = await ctx.followup.send(embed=embed, file=file, wait=True)
+    
     view = TimeframeView(author_id=user_id, original_message=response_message)
     await response_message.edit(view=view)
+    
     active_games[user_id] = {
         "answer": answer_ticker, "answer_data": answer_data,
         "guesses": 0, "history": [], "message": response_message
@@ -181,9 +182,12 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
         await ctx.respond(f"Your guess must be a **{len(answer_ticker)}-letter** ticker.", ephemeral=True)
         return
 
+    # Defer ephemerally because all our responses will be silent or private.
     await ctx.defer(ephemeral=True) 
+    
     guess_data = get_stock_data(guess_ticker)
     if not guess_data:
+        # Use followup for error messages.
         await ctx.followup.send(
             f"'{guess_ticker}' doesn't seem to be a valid stock ticker. Please try again.",
             ephemeral=True
@@ -207,8 +211,10 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
             end_embed = discord.Embed(title=f"🎉 You got it! It was {answer_ticker}!", description=f"**{answer_data['name']}**\n\n" + "\n\n".join(game["history"]), color=discord.Color.gold())
         else:
             end_embed = discord.Embed(title="Game Over!", description=f"The correct ticker was **{answer_ticker} ({answer_data['name']})**.\n\n" + "\n\n".join(game["history"]), color=discord.Color.red())
+        
         original_message = game.get("message")
         if original_message: await original_message.edit(view=None)
+        
         history_message = game.get("history_message")
         if history_message:
             await history_message.edit(embed=end_embed)
