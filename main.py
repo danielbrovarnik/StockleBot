@@ -73,7 +73,6 @@ def get_stock_data(ticker: str) -> dict | None:
     """Fetches stock data from yfinance and validates it."""
     try:
         stock = yf.Ticker(ticker)
-        # A robust check: ensure info exists and has a market cap.
         if stock.info and stock.info.get('marketCap') is not None:
             return {
                 "ticker": stock.info.get('symbol', 'N/A'),
@@ -83,7 +82,6 @@ def get_stock_data(ticker: str) -> dict | None:
             }
         return None
     except Exception:
-        # yfinance will throw an error for most invalid tickers
         return None
 
 # --- UI Views ---
@@ -91,19 +89,17 @@ def get_stock_data(ticker: str) -> dict | None:
 class TimeframeView(View):
     """A view with buttons to change the timeframe of the stock chart."""
     def __init__(self, author_id: int, original_message: discord.InteractionMessage):
-        super().__init__(timeout=300) # View times out after 5 minutes
+        super().__init__(timeout=300) 
         self.author_id = author_id
         self.message = original_message
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Ensures only the person who started the game can use the buttons."""
         if interaction.user.id == self.author_id:
             return True
         await interaction.response.send_message("This isn't your game!", ephemeral=True)
         return False
 
     async def update_chart(self, interaction: discord.Interaction, timeframe: str):
-        """Updates the chart image in the original message."""
         await interaction.response.defer()
         game = active_games.get(interaction.user.id)
         if not game:
@@ -176,9 +172,13 @@ async def stockle(ctx: discord.ApplicationContext):
     view = TimeframeView(author_id=user_id, original_message=response_message)
     await response_message.edit(view=view)
 
+    # MODIFICATION: Store IDs instead of the full message object
     active_games[user_id] = {
         "answer": answer_ticker, "answer_data": answer_data,
-        "guesses": 0, "history": [], "message": response_message
+        "guesses": 0, "history": [],
+        "message_id": response_message.id,
+        "channel_id": ctx.channel.id,
+        "history_message": None # Initialize as None
     }
     os.remove(chart_file_path)
 
@@ -188,7 +188,6 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
     user_id = ctx.author.id
     guess_ticker = ticker.upper().strip()
 
-    # --- STEP 1: Perform all FAST checks before deferring ---
     if user_id not in active_games:
         await ctx.respond("You don't have a game in progress. Use `/stockle` to start one.", ephemeral=True)
         return
@@ -200,19 +199,16 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
         await ctx.respond(f"Your guess must be a **{len(answer_ticker)}-letter** ticker.", ephemeral=True)
         return
 
-    # --- STEP 2: Defer ONLY when you're about to do a SLOW task ---
     await ctx.defer(ephemeral=True) 
 
-    guess_data = get_stock_data(guess_ticker) # This is the slow part
+    guess_data = get_stock_data(guess_ticker) 
     if not guess_data:
-        # Now we MUST use followup.send() because we deferred
         await ctx.followup.send(
             f"'{guess_ticker}' doesn't seem to be a valid stock ticker. Please try again.",
             ephemeral=True
         )
         return
 
-    # --- All the logic for hints and history is the same ---
     game["guesses"] += 1
     answer_data = game["answer_data"]
 
@@ -228,46 +224,42 @@ async def guess(ctx: discord.ApplicationContext, ticker: str):
     is_win = (guess_ticker == answer_ticker)
     is_loss = (game["guesses"] >= 6 and not is_win)
 
-    # Check for win/loss condition first
     if is_win or is_loss:
         if is_win:
             end_embed = discord.Embed(title=f"🎉 You got it! It was {answer_ticker}!", description=f"**{answer_data['name']}**\n\n" + "\n\n".join(game["history"]), color=discord.Color.gold())
-        else: # Loss condition
+        else:
             end_embed = discord.Embed(title="Game Over!", description=f"The correct ticker was **{answer_ticker} ({answer_data['name']})**.\n\n" + "\n\n".join(game["history"]), color=discord.Color.red())
 
-        original_message = game.get("message")
-        if original_message: await original_message.edit(view=None)
-        
+        # MODIFICATION: Fetch the original message using its ID to safely edit it
+        try:
+            channel = bot.get_channel(game["channel_id"])
+            if channel:
+                original_message = await channel.fetch_message(game["message_id"])
+                await original_message.edit(view=None)
+        except (discord.errors.NotFound, discord.errors.Forbidden) as e:
+            print(f"Could not edit original game message (ID: {game['message_id']}): {e}")
+
         history_message = game.get("history_message")
         if history_message:
             await history_message.edit(embed=end_embed)
         else:
             await ctx.channel.send(embed=end_embed)
         
-        # Fulfill the promise for the win/loss condition
         await ctx.followup.send("Game over! See the final result above.", ephemeral=True)
         del active_games[user_id]
         return
 
-    # If the game is not over, create the history embed
     embed = discord.Embed(title="Your Guess History", description="\n\n".join(game["history"]), color=discord.Color.blue())
     embed.set_footer(text=f"You have {6 - game['guesses']} guesses left.")
     
-    # Now, either edit the existing message or send a new one
     history_message = game.get("history_message")
     if history_message:
         await history_message.edit(embed=embed)
     else:
         response_message = await ctx.channel.send(embed=embed)
-        game["history_message"] = response_message
+        game["history_message"] = response_message # Store the message object here
         
-    # MODIFICATION START
-    # Fulfill the deferred interaction silently.
-    # We send a temporary, invisible message and delete it immediately.
-    # This acknowledges the command without sending a visible "guess recorded" message.
-    interaction_response = await ctx.followup.send("\u200b", ephemeral=True)
-    await interaction_response.delete()
-    # MODIFICATION END
+    await ctx.followup.send("Your guess has been recorded.", ephemeral=True)
 
 
 @bot.slash_command(name="quit", description="Quit your current Stockle game.")
@@ -276,19 +268,21 @@ async def quit_game(ctx: discord.ApplicationContext):
     if user_id in active_games:
         game = active_games[user_id]
         
-        # Disable buttons on the original message
-        original_message = game.get("message")
-        if original_message:
-            await original_message.edit(view=None)
+        # MODIFICATION: Fetch the original message using its ID to safely edit it
+        try:
+            channel = bot.get_channel(game["channel_id"])
+            if channel:
+                original_message = await channel.fetch_message(game["message_id"])
+                await original_message.edit(view=None)
+        except (discord.errors.NotFound, discord.errors.Forbidden) as e:
+            print(f"Could not edit original game message (ID: {game['message_id']}): {e}")
 
-        # Delete the history message
         history_message = game.get("history_message")
         if history_message:
             try:
                 await history_message.delete()
-            except discord.errors.NotFound:
-                # The message might have been deleted by a user/mod, which is fine.
-                pass
+            except (discord.errors.NotFound, discord.errors.Forbidden):
+                pass 
 
         del active_games[user_id]
         await ctx.respond("Your game has been ended.", ephemeral=True)
@@ -297,10 +291,8 @@ async def quit_game(ctx: discord.ApplicationContext):
 
 # --- Run the Bot ---
 try:
-    # It is recommended to use an environment variable for your token
-    # For example, in Replit, use the Secrets tool
     TOKEN = os.environ['DISCORD_TOKEN']
     bot.run(TOKEN)
 except KeyError:
     print("FATAL ERROR: DISCORD_TOKEN environment variable not set.")
-    print("Please set your bot's token as an environment variable.")
+    print("Please set your bot's token as an environment variable (e.g., in Railway secrets).")
